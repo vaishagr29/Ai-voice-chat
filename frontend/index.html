@@ -1,0 +1,577 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Realtime AI Voice Chat</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: #212121;
+            color: #ffffff;
+        }
+
+        .app-container {
+            display: flex;
+            height: 100vh;
+            width: 100%;
+        }
+
+        .sidebar {
+            width: 260px;
+            background: #171717;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #333;
+        }
+
+        .sidebar h2 {
+            font-size: 20px;
+            margin-bottom: 25px;
+        }
+
+        #newChatButton {
+            background: #333333;
+            color: white;
+            border: 1px solid #555;
+            border-radius: 8px;
+            padding: 12px;
+            text-align: left;
+            cursor: pointer;
+            margin-bottom: 30px;
+        }
+
+        .sidebar h3 {
+            font-size: 14px;
+            color: #aaaaaa;
+            margin-bottom: 15px;
+        }
+
+        #chatHistory {
+            overflow-y: auto;
+        }
+
+        #chatHistory button {
+            width: 100%;
+            background: transparent;
+            color: #dddddd;
+            border: none;
+            border-radius: 8px;
+            padding: 12px;
+            text-align: left;
+            cursor: pointer;
+            margin-bottom: 5px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        #chatHistory button:hover {
+            background: #303030;
+        }
+
+        .main-chat {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            padding: 20px 30px;
+        }
+
+        .chat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #333;
+        }
+
+        .chat-header h2 {
+            font-size: 20px;
+        }
+
+        .chat-header button {
+            background: #333;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 15px;
+            cursor: pointer;
+        }
+
+        #messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 25px 10px;
+            margin-bottom: 15px;
+        }
+
+        #messages p {
+            padding: 12px 16px;
+            margin-bottom: 15px;
+            border-radius: 12px;
+            background: #303030;
+            max-width: 80%;
+            line-height: 1.5;
+            overflow-wrap: anywhere;
+        }
+
+        .chat-input-area {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            padding: 12px;
+            background: #303030;
+            border: 1px solid #555;
+            border-radius: 15px;
+        }
+
+        .chat-input-area input {
+            flex: 1;
+            min-width: 0;
+            background: transparent;
+            color: white;
+            border: none;
+            outline: none;
+            padding: 12px;
+            font-size: 15px;
+        }
+
+        .chat-input-area button {
+            background: #555;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 12px 16px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            opacity: 0.85;
+        }
+
+        @media (max-width: 700px) {
+            .sidebar {
+                width: 180px;
+                padding: 12px;
+            }
+
+            .main-chat {
+                padding: 12px;
+            }
+
+            .chat-header h2 {
+                font-size: 16px;
+            }
+
+            .chat-input-area {
+                gap: 5px;
+            }
+
+            .chat-input-area button {
+                padding: 10px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="app-container">
+
+        <aside class="sidebar">
+
+            <h2>AI Voice Chat</h2>
+
+            <button onclick="newChat()" id="newChatButton">
+                + New Chat
+            </button>
+
+            <h3>Chat History</h3>
+
+            <div id="chatHistory"></div>
+
+        </aside>
+
+        <main class="main-chat">
+
+            <div class="chat-header">
+                <h2>Realtime AI Assistant</h2>
+
+                <button onclick="clearChat()">
+                    Clear Chat
+                </button>
+            </div>
+
+            <div id="messages"></div>
+
+            <div class="chat-input-area">
+
+                <input
+                    type="text"
+                    id="messageInput"
+                    placeholder="Type your message..."
+                >
+
+                <button onclick="sendMessage()">Send</button>
+
+                <button onclick="toggleRecording()" id="micButton">
+                    🎙️
+                </button>
+
+            </div>
+
+        </main>
+
+    </div>
+
+    <script>
+
+        const sessionId =
+            localStorage.getItem("chat_session_id") || crypto.randomUUID();
+
+        localStorage.setItem("chat_session_id", sessionId);
+
+        const socket = new WebSocket(
+            `ws://127.0.0.1:8000/ws?session_id=${sessionId}`
+        );
+
+        const messages = document.getElementById("messages");
+
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let isRecording = false;
+
+        // Store currently playing AI audio
+        let currentAudio = null;
+
+        // Track incoming responses to ignore older audio
+        let responseVersion = 0;
+
+        // Stop currently playing AI audio
+        function stopCurrentAudio() {
+
+            if (currentAudio) {
+                currentAudio.pause();
+                currentAudio.currentTime = 0;
+                currentAudio = null;
+            }
+
+        }
+
+        // Start a new user turn and interrupt current audio
+        function interruptAI() {
+            stopCurrentAudio();
+
+            if (socket.readyState === WebSocket.OPEN) {
+                socket.send("__INTERRUPT__");
+            }
+        }
+
+        socket.onopen = function() {
+
+            addMessage("Connected to backend!");
+            loadChatMessages();
+
+        };
+
+        socket.onmessage = function(event) {
+
+            // If the backend sends audio
+            if (event.data instanceof Blob) {
+
+                const audioURL = URL.createObjectURL(event.data);
+
+                // Ignore an older response if a newer turn has started
+                const receivedVersion = responseVersion;
+
+                if (receivedVersion !== responseVersion) {
+                    URL.revokeObjectURL(audioURL);
+                    return;
+                }
+
+                stopCurrentAudio();
+
+                const audio = new Audio(audioURL);
+
+                currentAudio = audio;
+
+                audio.onended = function() {
+
+                    URL.revokeObjectURL(audioURL);
+
+                    if (currentAudio === audio) {
+                        currentAudio = null;
+                    }
+
+                };
+
+                audio.onerror = function() {
+
+                    URL.revokeObjectURL(audioURL);
+
+                    if (currentAudio === audio) {
+                        currentAudio = null;
+                    }
+
+                };
+
+                audio.play().catch(function(error) {
+                    console.log("Audio playback error:", error);
+                });
+
+            }
+
+            // If the backend sends text
+            else {
+
+                const reply = event.data;
+
+                if (reply === "__CHAT_CLEARED__") {
+
+                    interruptAI();
+                    messages.innerHTML = "";
+                    addMessage("Chat history cleared!");
+
+                    return;
+                }
+
+                addMessage("AI: " + reply);
+
+            }
+
+        };
+
+        socket.onclose = function() {
+            stopCurrentAudio();
+            addMessage("Connection closed.");
+        };
+
+        socket.onerror = function() {
+            addMessage("WebSocket error occurred.");
+        };
+
+        function sendMessage() {
+
+            const input = document.getElementById("messageInput");
+            const message = input.value.trim();
+
+            if (message && socket.readyState === WebSocket.OPEN) {
+
+                // Interrupt previous AI speech
+                interruptAI();
+
+                addMessage("You: " + message);
+
+                socket.send(message);
+
+                input.value = "";
+
+            }
+
+        }
+
+        function newChat() {
+
+            stopCurrentAudio();
+
+            const newSessionId = crypto.randomUUID();
+
+            localStorage.setItem("chat_session_id", newSessionId);
+
+            location.reload();
+
+        }
+
+        function clearChat() {
+
+            const confirmClear = confirm(
+                "Are you sure you want to delete this conversation?"
+            );
+
+            if (!confirmClear) {
+                return;
+            }
+
+            interruptAI();
+
+            if (socket.readyState === WebSocket.OPEN) {
+                socket.send("__CLEAR_CHAT__");
+            }
+
+        }
+
+        function addMessage(message) {
+
+            const p = document.createElement("p");
+
+            p.textContent = message;
+
+            messages.appendChild(p);
+
+            messages.scrollTop = messages.scrollHeight;
+
+        }
+
+        async function loadChatMessages() {
+
+            const response = await fetch(
+                `http://127.0.0.1:8000/history/${sessionId}`
+            );
+
+            const chatMessages = await response.json();
+
+            messages.innerHTML = "";
+
+            chatMessages.forEach(message => {
+
+                const label =
+                    message.role === "user" ? "You: " : "AI: ";
+
+                addMessage(label + message.content);
+
+            });
+
+        }
+
+        async function toggleRecording() {
+
+            if (isRecording) {
+
+                mediaRecorder.stop();
+
+                return;
+
+            }
+
+            if (socket.readyState !== WebSocket.OPEN) {
+
+                addMessage("Backend is not connected.");
+
+                return;
+
+            }
+
+            try {
+
+                // Interrupt AI as soon as the user starts a new recording
+                interruptAI();
+
+                const stream =
+                    await navigator.mediaDevices.getUserMedia({
+                        audio: true
+                    });
+
+                mediaRecorder = new MediaRecorder(stream);
+
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = function(event) {
+
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+
+                };
+
+                mediaRecorder.onstop = async function() {
+
+                    isRecording = false;
+
+                    const audioBlob = new Blob(audioChunks, {
+                        type: mediaRecorder.mimeType
+                    });
+
+                    stream.getTracks().forEach(track => track.stop());
+
+                    addMessage("Sending audio to Whisper...");
+
+                    const audioBuffer = await audioBlob.arrayBuffer();
+
+                    if (socket.readyState === WebSocket.OPEN) {
+
+                        socket.send(audioBuffer);
+
+                    } else {
+
+                        addMessage("Backend connection was lost.");
+
+                    }
+
+                    document.getElementById("micButton").textContent =
+                        "🎙️ Start Recording";
+
+                };
+
+                mediaRecorder.start();
+
+                isRecording = true;
+
+                document.getElementById("micButton").textContent =
+                    "⏹ Stop Recording";
+
+                addMessage("Listening... Speak now!");
+
+            } catch (error) {
+
+                addMessage("Microphone error: " + error.message);
+
+            }
+
+        }
+
+        async function loadChatHistory() {
+
+            const response = await fetch(
+                "http://127.0.0.1:8000/history"
+            );
+
+            const chats = await response.json();
+
+            const historyDiv = document.getElementById("chatHistory");
+
+            historyDiv.innerHTML = "";
+
+            chats.forEach(chat => {
+
+                const button = document.createElement("button");
+
+                button.textContent =
+                    `${chat.title || "New Chat"} (${chat.message_count} messages)`;
+
+                button.style.display = "block";
+                button.style.margin = "8px 0";
+
+                button.onclick = function() {
+
+                    stopCurrentAudio();
+
+                    localStorage.setItem(
+                        "chat_session_id",
+                        chat.session_id
+                    );
+
+                    location.reload();
+
+                };
+
+                historyDiv.appendChild(button);
+
+            });
+
+        }
+
+        loadChatHistory();
+
+    </script>
+
+</body>
+</html>

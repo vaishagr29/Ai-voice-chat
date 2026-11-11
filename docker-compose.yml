@@ -1,0 +1,21 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+
+    ports:
+      - "8000:8000"
+
+    environment:
+      OLLAMA_HOST: "http://host.docker.internal:11434"
+      DATABASE_PATH: "/data/chat_history.db"
+      HF_HOME: "/cache/huggingface"
+
+    volumes:
+      - chat_history:/data
+      - whisper_cache:/cache
+
+volumes:
+  chat_history:
+  whisper_cache:
